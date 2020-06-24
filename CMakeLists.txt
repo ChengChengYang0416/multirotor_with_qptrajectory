@@ -12,6 +12,9 @@ find_package(catkin REQUIRED COMPONENTS
   rospy
   std_msgs
   mavros
+  sensor_msgs
+  nav_msgs 
+  tf
 )
 
 find_package(
@@ -245,3 +248,6 @@ ${PYTHON_LIBRARIES}
 qptrajectory
 
 )
+
+add_executable(showpath src/showpath.cpp)
+target_link_libraries(showpath ${catkin_LIBRARIES})

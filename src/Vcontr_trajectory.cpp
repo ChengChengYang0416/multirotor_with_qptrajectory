@@ -1,6 +1,7 @@
 #include <ros/ros.h>
 #include <geometry_msgs/Point.h>
 #include <qptrajectory.h>
+#include <nav_msgs/Path.h>
 #include <geometry_msgs/PoseStamped.h>
 #include <geometry_msgs/TwistStamped.h>
 #include <mavros_msgs/CommandBool.h>
@@ -34,12 +35,17 @@ path_def path;
 trajectory_profile p1,p2,p3,p4,p5,p6,p7,p8,p9;
 std::vector<trajectory_profile> data;
 
+// desired trajectory and real trajectory
+nav_msgs::Path desi_traj;
+nav_msgs::Path real_traj;
+
 mavros_msgs::State current_state;
 void state_cb(const mavros_msgs::State::ConstPtr& msg)
 {
     current_state = *msg;
 }
 
+geometry_msgs::PoseStamped current_trajectory;
 geometry_msgs::PoseStamped current_position;
 void position_cb(const geometry_msgs::PoseStamped::ConstPtr& msg)
 {
@@ -186,13 +192,21 @@ int main(int argc, char **argv)
     ros::Publisher local_velocity_pub = nh.advertise<geometry_msgs::TwistStamped>
             ("mavros/setpoint_velocity/cmd_vel", 10);
 
+    // publisher to publish trajectory to rviz
+    ros::Publisher desired_traj_pub = nh.advertise<nav_msgs::Path>
+            ("/desired_trajeceory", 1, true);
+
+    // publisher to publish trajectory to rviz
+    ros::Publisher real_traj_pub = nh.advertise<nav_msgs::Path>
+            ("/real_trajeceory", 1, true);
+
     // the setpoint publishing rate MUST be faster than 2Hz
     ros::Rate rate(20.0);
 
     // publisher for the trajectory
-    ros::Publisher pos_pub = nh.advertise<geometry_msgs::Point>("/pos",10);
-    ros::Publisher vel_pub = nh.advertise<geometry_msgs::Point>("/vel",10);
-    ros::Publisher acc_pub = nh.advertise<geometry_msgs::Point>("/acc",10);
+    ros::Publisher pos_pub = nh.advertise<geometry_msgs::Point>("/pos", 10);
+    ros::Publisher vel_pub = nh.advertise<geometry_msgs::Point>("/vel", 10);
+    ros::Publisher acc_pub = nh.advertise<geometry_msgs::Point>("/acc", 10);
 
     // wait for FCU connection
     while(ros::ok() && !current_state.connected){
@@ -225,10 +239,22 @@ int main(int argc, char **argv)
 
     ros::Time last_request = ros::Time::now();
 
+    ros::Time current_time, last_time;
+    current_time = ros::Time::now();
+    last_time = ros::Time::now();
+
+    // set trajectory time stamp and frame id
+    real_traj.header.stamp = current_time;
+    real_traj.header.frame_id = "odom";
+    desi_traj.header.stamp = current_time;
+    desi_traj.header.frame_id = "odom";
+
     // calculate trajectory with qp
     process();
 
     while(ros::ok()){
+        current_time = ros::Time::now();
+
         if( current_state.mode != "OFFBOARD" &&
             (ros::Time::now() - last_request > ros::Duration(5.0))){
             if( set_mode_client.call(offb_set_mode) &&
@@ -341,15 +367,34 @@ int main(int argc, char **argv)
 
         count++;
         ROS_INFO("%f,%f",count,max);
+        current_trajectory.pose.position.x = pos.x;
+        current_trajectory.pose.position.y = pos.y;
+        current_trajectory.pose.position.z = pos.z;
 
+        // set trajectory time stamp and frame id
+        current_position.header.stamp = current_time;
+        current_position.header.frame_id = "odom";
+        current_trajectory.header.stamp = current_time;
+        current_trajectory.header.frame_id = "odom";
+
+        // push lastest point to trajectory
+        real_traj.poses.push_back(current_position);
+        desi_traj.poses.push_back(current_trajectory);
+
+        // calculate velocity command
         vel_cmd = controller();
+
+        // publish
         local_velocity_pub.publish(vel_cmd);
         acc_pub.publish(acc);
         vel_pub.publish(vel);
         pos_pub.publish(pos);
+        real_traj_pub.publish(real_traj);
+        desired_traj_pub.publish(desi_traj);
         ROS_INFO("roll = %.2f, pitch = %.2f, yaw = %.2f", roll, pitch, yaw);
 
         ros::spinOnce();
+        last_time = current_time;
         rate.sleep();
     }
     return 0;
